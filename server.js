@@ -5,7 +5,7 @@ const wss = new WebSocket.Server({ port: PORT });
 
 console.log(`MathsZ server started on port ${PORT}`);
 
-// rooms = { roomCode: { host: ws, guest: ws, mode, difficulty, state } }
+// rooms = { roomCode: { host, guest, mode, difficulty, state, currentTask } }
 const rooms = {};
 
 function generateRoomCode() {
@@ -61,6 +61,7 @@ wss.on('connection', (ws) => {
                 guest: null,
                 mode: msg.mode || 'turn',
                 difficulty: msg.difficulty || 1,
+                currentTask: null,
                 state: {
                     status: 'waiting',
                     hostScore: 0,
@@ -115,6 +116,23 @@ wss.on('connection', (ws) => {
             console.log('Room joined:', code);
         }
 
+        // === ХОСТ СОЗДАЛ ЗАДАЧУ ===
+        else if (msg.type === 'task_created') {
+            const room = rooms[ws.roomCode];
+            if (!room) return;
+
+            room.currentTask = {
+                text: msg.text,
+                answer: msg.answer,
+                symbol_id: msg.symbol_id || ""
+            };
+
+            // Отправляем гостю (если он есть)
+            if (room.guest) {
+                send(room.guest, 'task_received', { task: room.currentTask });
+            }
+        }
+
         // === ПРАВИЛЬНЫЙ ОТВЕТ ===
         else if (msg.type === 'correct_answer') {
             const room = rooms[ws.roomCode];
@@ -135,7 +153,20 @@ wss.on('connection', (ws) => {
                 room.state.status = 'finished';
             }
 
+            room.currentTask = null;
             broadcast(room, 'state_update', { state: room.state });
+
+            // Если игра продолжается — просим новую задачу
+            if (room.state.status === 'playing') {
+                if (room.mode === 'duel' && room.host) {
+                    send(room.host, 'need_new_task', {});
+                } else if (room.mode === 'turn') {
+                    const nextPlayer = room.state.currentTurn === 'host' ? room.host : room.guest;
+                    if (nextPlayer) {
+                        send(nextPlayer, 'need_new_task', {});
+                    }
+                }
+            }
         }
 
         // === НЕПРАВИЛЬНЫЙ ОТВЕТ ===
@@ -153,7 +184,19 @@ wss.on('connection', (ws) => {
                 room.state.status = 'finished';
             }
 
+            room.currentTask = null;
             broadcast(room, 'state_update', { state: room.state });
+
+            if (room.state.status === 'playing') {
+                if (room.mode === 'duel' && room.host) {
+                    send(room.host, 'need_new_task', {});
+                } else if (room.mode === 'turn') {
+                    const nextPlayer = room.state.currentTurn === 'host' ? room.host : room.guest;
+                    if (nextPlayer) {
+                        send(nextPlayer, 'need_new_task', {});
+                    }
+                }
+            }
         }
 
         // === ВЫХОД ИЗ КОМНАТЫ ===
